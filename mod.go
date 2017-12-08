@@ -3,73 +3,82 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"path"
 	"strconv"
-	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 )
 
-// based on github.com/paralin/CURSETools
+type Modfile struct {
+	ProjectFileID uint64
+	FileName      string
+}
+
+func ParseModfile(jsonVal string) (file Modfile) {
+	json.Unmarshal([]byte(jsonVal), &file)
+	return
+}
+
 type Mod struct {
+	Game  string
+	Addon string
+
 	Created uint64
 	Updated uint64
 	Install uint64
-	Version string
 
-	CurseURL    string
-	ProjectURL  string
-	DownloadURL string
+	Installed Modfile
+	Newest    Modfile
+}
+
+func (m Mod) CurseURL() string {
+	return fmt.Sprintf("http://www.curseforge.com/%s/%s", m.Game, m.Addon)
+}
+
+func (m Mod) DownloadURL(file Modfile) string {
+	return fmt.Sprintf("http://www.curseforge.com/%s/%s/download/%d/file", m.Game, m.Addon, file.ProjectFileID)
+}
+
+func (m Mod) cacheDirectory() string {
+	dir := path.Join(addoncache, m.Game, m.Addon)
+	os.MkdirAll(dir, os.ModePerm)
+	return dir
 }
 
 func (m *Mod) Update() {
-	doc, err := goquery.NewDocument(m.CurseURL)
+	// pull the info page
+	doc, err := goquery.NewDocument(m.CurseURL())
 	if err != nil {
 		return
 	}
 
-	body := doc.Find("div.main-info")
-	details := body.Find("ul.details-list")
-
 	// creation/update times
-	details.Find("li.updated").Each(
-		func(i int, s *goquery.Selection) {
-			update, _ := s.Children().First().Attr("data-epoch")
-			if strings.HasPrefix(s.Text(), "Updated") {
-				m.Updated, _ = strconv.ParseUint(update, 10, 64)
-			} else {
-				m.Created, _ = strconv.ParseUint(update, 10, 64)
-			}
-		})
+	times := doc.Find("abbr")
+	created, _ := times.Eq(1).Attr("data-epoch")
+	m.Created, _ = strconv.ParseUint(created, 10, 64)
+	updated, _ := times.Eq(0).Attr("data-epoch")
+	m.Updated, _ = strconv.ParseUint(updated, 10, 64)
 
-	// version
-	nft := details.Find("li.newest-file").Text()
-	vid := strings.Index(nft, ":") + 2
-	if vid < len(nft) {
-		m.Version = nft[vid:]
-	} else {
-		m.Version = "UNK - TODO mod.go:57" // TODO
-	}
-
-	// curseforge url
-	m.ProjectURL, _ = details.Find(".curseforge").Find("a").Attr("href")
-
-	// download url
-	doc, err = goquery.NewDocument(m.CurseURL + "/download")
+	// pull the release list
+	files, err := goquery.NewDocument(m.CurseURL() + "/files")
 	if err != nil {
-		m.DownloadURL = err.Error()
+		return
 	}
-	m.DownloadURL, _ = doc.Find("div.countdown").Find("a").Attr("data-href")
+
+	modfileJson, _ := files.Find("a.button--download").Eq(1).Attr("data-action-value")
+	m.Newest = ParseModfile(modfileJson)
 }
 
 func (m *Mod) InstallTo() {
 	// download zip from mod, install to directory by just xtract
-	resp, err := http.Get(m.DownloadURL)
+	resp, err := http.Get(m.DownloadURL(m.Newest))
 	if err != nil {
 		return
 	}
@@ -77,7 +86,8 @@ func (m *Mod) InstallTo() {
 	if err != nil {
 		return
 	}
-	ioutil.WriteFile(addoncache+"/"+path.Base(resp.Request.URL.Path), dat, os.ModePerm)
+
+	ioutil.WriteFile(path.Join(m.cacheDirectory(), m.Newest.FileName+".zip"), dat, os.ModePerm)
 	rto := bytes.NewReader(dat)
 
 	zr, err := zip.NewReader(rto, resp.ContentLength)
@@ -98,13 +108,14 @@ func (m *Mod) InstallTo() {
 		d.Close()
 	}
 	m.Install = m.Updated
-	fmt.Printf("finished install (%s to version %s)\n", m.CurseURL, m.Version)
+	m.Installed = m.Newest
+	log.Printf("finished install (%s to version %s)", m.Addon, m.Installed.FileName)
 }
 
 func (m *Mod) Uninstall() {
 	// do this, added the things
 	// also check docs for return (probably error)
-	fmt.Printf("possibly finished uninstall\n")
+	log.Print("possibly finished uninstall")
 }
 
 func (m *Mod) UpdateI() {
@@ -113,12 +124,8 @@ func (m *Mod) UpdateI() {
 	}
 }
 
-func ParseURL(url string) *Mod {
-	r := &Mod{CurseURL: url}
+func GetMod(game, addon string) *Mod {
+	r := &Mod{Game: game, Addon: addon}
 	r.Update()
 	return r
-}
-
-func GetMod(game, addon string) *Mod {
-	return ParseURL(fmt.Sprintf("http://www.curse.com/%s/%s", game, addon))
 }

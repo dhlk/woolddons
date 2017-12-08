@@ -49,7 +49,7 @@ var port, adir, game string
 func main() {
 	flag.StringVar(&port, "addr", ":8080", "webserver port")
 	flag.StringVar(&adir, "adir", "addons", "directory to install addons into")
-	flag.StringVar(&game, "game", "addons/wow", "game prefix (ws-addons/wildstar for wildstar)")
+	flag.StringVar(&game, "game", "wow/addons", "game prefix (wildstar/ws-addons for wildstar...)")
 	flag.Parse()
 	adir = adir + "/"
 
@@ -64,6 +64,7 @@ func main() {
 				mod.UpdateI()
 				addons.Save()
 			}
+			http.Redirect(w, req, "/", http.StatusFound)
 		})
 
 	http.HandleFunc(
@@ -82,6 +83,7 @@ func main() {
 				addons[addon] = nil
 			}
 			addons.Save()
+			http.Redirect(w, req, "/", http.StatusFound)
 		})
 
 	// home
@@ -95,6 +97,7 @@ func main() {
 	http.HandleFunc(
 		"/style.css",
 		func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Content-Type", "text/css")
 			fmt.Fprint(w, style)
 		})
 
