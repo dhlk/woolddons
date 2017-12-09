@@ -1,17 +1,13 @@
 package main
 
 import (
-	"archive/zip"
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"path"
 	"strconv"
+	"sync"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -36,6 +32,15 @@ type Mod struct {
 
 	Installed Modfile
 	Newest    Modfile
+
+	mu *sync.Mutex
+}
+
+func (m *Mod) lock() {
+	if m.mu == nil {
+		m.mu = &sync.Mutex{}
+	}
+	m.mu.Lock()
 }
 
 func (m Mod) CurseURL() string {
@@ -53,6 +58,9 @@ func (m Mod) cacheDirectory() string {
 }
 
 func (m *Mod) Update() {
+	m.lock()
+	defer m.mu.Unlock()
+
 	// pull the info page
 	doc, err := goquery.NewDocument(m.CurseURL())
 	if err != nil {
@@ -77,45 +85,52 @@ func (m *Mod) Update() {
 }
 
 func (m *Mod) InstallTo() {
-	// download zip from mod, install to directory by just xtract
-	resp, err := http.Get(m.DownloadURL(m.Newest))
-	if err != nil {
-		return
-	}
-	dat, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return
-	}
+	m.lock()
+	defer m.mu.Unlock()
 
-	ioutil.WriteFile(path.Join(m.cacheDirectory(), m.Newest.FileName+".zip"), dat, os.ModePerm)
-	rto := bytes.NewReader(dat)
+	zipName := path.Join(m.cacheDirectory(), m.Newest.FileName+".zip")
 
-	zr, err := zip.NewReader(rto, resp.ContentLength)
+	err := ZipDownload(m.DownloadURL(m.Newest), zipName)
 	if err != nil {
 		return
 	}
 
-	for _, file := range zr.File {
-		zfr, err := file.Open()
-		if err != nil {
-			return
-		}
-
-		dest := adir + file.Name
-		os.MkdirAll(path.Dir(dest), os.ModePerm)
-		d, _ := os.Create(dest)
-		io.Copy(d, zfr)
-		d.Close()
+	err = ZipInstall(zipName, adir)
+	if err != nil {
+		return
 	}
+
 	m.Install = m.Updated
 	m.Installed = m.Newest
+
 	log.Printf("finished install (%s to version %s)", m.Addon, m.Installed.FileName)
 }
 
 func (m *Mod) Uninstall() {
-	// do this, added the things
-	// also check docs for return (probably error)
-	log.Print("possibly finished uninstall")
+	m.lock()
+	defer m.mu.Unlock()
+
+	zipName := path.Join(m.cacheDirectory(), m.Installed.FileName+".zip")
+
+	// if you foolishly deleted the cached copy...
+	if _, err := os.Stat(zipName); os.IsNotExist(err) {
+		err = ZipDownload(m.DownloadURL(m.Installed), zipName)
+		if err != nil {
+			return
+		}
+	}
+
+	err := ZipUninstall(zipName, adir)
+	if err != nil {
+		return
+	}
+
+	defer func() {
+		m.Install = 0
+		m.Installed = Modfile{}
+	}()
+
+	log.Printf("finished uninstall (%s from version %s)", m.Addon, m.Installed.FileName)
 }
 
 func (m *Mod) UpdateI() {
