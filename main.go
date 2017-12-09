@@ -80,7 +80,7 @@ func main() {
 				addons[addon].InstallTo()
 			} else if action == "remove" {
 				addons[addon].Uninstall()
-				addons[addon] = nil
+				delete(addons, addon)
 			}
 			addons.Save()
 			http.Redirect(w, req, "/", http.StatusFound)
