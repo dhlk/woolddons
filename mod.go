@@ -135,6 +135,7 @@ func (m *Mod) Uninstall() {
 
 func (m *Mod) UpdateI() {
 	if m.Install < m.Updated {
+		m.Uninstall()
 		m.InstallTo()
 	}
 }
